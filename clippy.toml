@@ -1,2 +1,2 @@
 # Domain vocabulary that is prose, not code.
-doc-valid-idents = ["XORed", ".."]
+doc-valid-idents = ["XORed", "..", "PowerShell", "PSReadLine"]

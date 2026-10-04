@@ -110,7 +110,7 @@ mod damage {
         /// Any bytes, read as any shell's: commands or problems, never a panic.
         #[test]
         fn arbitrary_bytes(data in proptest::collection::vec(any::<u8>(), 0..2_000)) {
-            for format in [history::Format::Bash, history::Format::Zsh, history::Format::Fish] {
+            for format in [history::Format::Bash, history::Format::Zsh, history::Format::Fish, history::Format::PowerShell] {
                 let _ = history::parse_as(&data, format);
             }
         }

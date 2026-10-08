@@ -1,6 +1,6 @@
 [package]
 name = "sootmark-history"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 rust-version = "1.80"
 description = "Shell history files (bash, zsh, fish, PowerShell PSReadLine): every command, with its time, duration and paths when the shell wrote them."

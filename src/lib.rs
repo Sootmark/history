@@ -14,9 +14,15 @@
 //! - **PowerShell** (PSReadLine, `…\PSReadLine\<host>Host_history.txt`): a
 //!   command per line, untimed; a line ending in a backtick goes on to the
 //!   next, as PSReadLine writes a multi-line command.
+//! - **Vim** (`.viminfo`, `_viminfo`): the command line, search,
+//!   expression, input and debug histories, registers, file marks and the
+//!   jump list, each entry's section in `section`, a mark's file in
+//!   `paths`, and its time from Vim 8's `|` lines.
 //!
 //! Times are UTC. Bytes that aren't UTF-8 are replaced with U+FFFD. A line
 //! that can't be read is reported in `problems`, never fatal.
+
+mod viminfo;
 
 use common::time::Ts;
 
@@ -37,6 +43,8 @@ pub enum Format {
     Fish,
     /// PSReadLine's `<host>Host_history.txt` (`ConsoleHost_history.txt`).
     PowerShell,
+    /// Vim's `.viminfo`.
+    Viminfo,
 }
 
 /// One command.
@@ -52,8 +60,11 @@ pub struct Command {
     pub duration_seconds: Option<u64>,
     /// The command, its lines joined with `\n`.
     pub command: String,
-    /// The paths it named (fish).
+    /// The paths it named (fish), the file a mark is in (Vim).
     pub paths: Vec<String>,
+    /// Vim's section: `Command Line History`, `Search String History`,
+    /// `Register`, `File mark`, `Jumplist`, ….
+    pub section: Option<&'static str>,
 }
 
 /// A file's commands.
@@ -84,6 +95,7 @@ impl Command {
             duration_seconds: None,
             command,
             paths: Vec::new(),
+            section: None,
         }
     }
 }
@@ -93,6 +105,9 @@ impl Command {
 /// name (`.zsh_history`, `.histfile`, `fish_history`); bash otherwise.
 #[must_use]
 pub fn detect(data: &[u8], name: Option<&str>) -> Format {
+    if viminfo::is_viminfo(data) {
+        return Format::Viminfo;
+    }
     for line in lines(data) {
         if line.bytes.starts_with(b"- cmd:") {
             return Format::Fish;
@@ -113,6 +128,8 @@ pub fn detect(data: &[u8], name: Option<&str>) -> Format {
         Format::PowerShell
     } else if file.ends_with("fish_history") {
         Format::Fish
+    } else if file.eq_ignore_ascii_case(".viminfo") || file.eq_ignore_ascii_case("_viminfo") {
+        Format::Viminfo
     } else {
         Format::Bash
     }
@@ -138,6 +155,7 @@ pub fn parse_as(data: &[u8], format: Format) -> History {
         Format::Zsh => zsh(data, &mut history),
         Format::Fish => fish(data, &mut history),
         Format::PowerShell => powershell(data, &mut history),
+        Format::Viminfo => viminfo::read(data, &mut history),
     }
     history
 }
